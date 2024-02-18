@@ -2,6 +2,9 @@ import * as pulumi from "@pulumi/pulumi";
 import * as aws from "@pulumi/aws";
 import * as apigateway from "@pulumi/aws-apigateway";
 import * as PDFDocument from "pdfkit";
+import * as esbuild from "esbuild";
+import * as path from "path";
+import * as fs from "fs";
 
 // A Lambda function to invoke
 const fn = new aws.lambda.CallbackFunction("fn", {
@@ -21,7 +24,6 @@ const pdfFn = new aws.lambda.CallbackFunction("pdfFn", {
         const doc = new PDFDocument({
           size: "A4",
           margin: 20,
-          // bufferPages: true,
         });
 
         const buffers: any = [];
@@ -57,12 +59,34 @@ const pdfFn = new aws.lambda.CallbackFunction("pdfFn", {
   },
 });
 
+esbuild.build({
+  bundle: true,
+  entryPoints: [path.join(__dirname, "./pdf-function.ts")],
+  platform: "node",
+  outfile: path.join(__dirname, "bundle/api.js"),
+  target: "node18",
+});
+
+const lambdaRole = new aws.iam.Role("lambdaRole", {
+  assumeRolePolicy: aws.iam.assumeRolePolicyForPrincipal(
+    aws.iam.Principals.LambdaPrincipal
+  ),
+});
+
+const pdfReducedSizeLambda = new aws.lambda.Function("pdfFnSmaller", {
+  code: new pulumi.asset.FileArchive(path.join(__dirname, "bundle")),
+  role: lambdaRole.arn,
+  runtime: "nodejs18.x",
+  handler: "api.handler",
+});
+
 // A REST API to route requests to HTML content and the Lambda function
 const api = new apigateway.RestAPI("api", {
   routes: [
     { path: "/", localPath: "www" },
     { path: "/date", method: "GET", eventHandler: fn },
     { path: "/pdf", method: "GET", eventHandler: pdfFn },
+    { path: "/pdf-simple", method: "GET", eventHandler: pdfReducedSizeLambda },
   ],
 });
 
